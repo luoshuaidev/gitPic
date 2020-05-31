@@ -2,15 +2,20 @@ package com.zbw.gitpic.utils;
 
 import com.zbw.gitpic.exception.AuthorizedException;
 import com.zbw.gitpic.exception.TipException;
+
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.MergeResult;
 import org.eclipse.jgit.api.PullResult;
-import org.eclipse.jgit.api.RebaseResult;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.TransportException;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
-import org.eclipse.jgit.transport.*;
+import org.eclipse.jgit.transport.CredentialsProvider;
+import org.eclipse.jgit.transport.FetchResult;
+import org.eclipse.jgit.transport.PushResult;
+import org.eclipse.jgit.transport.RemoteConfig;
+import org.eclipse.jgit.transport.RemoteRefUpdate;
+import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -156,7 +161,7 @@ public class GitUtils {
         try {
             Iterable<PushResult> results = git.push().call();
             PushResult result = results.iterator().next();
-            validPushResult(result);
+            validPushResult(repository, result);
         } catch (GitAPIException e) {
             logger.error(e.getMessage(), e);
             throw new TipException("git push 异常, message:" + e.getMessage());
@@ -176,7 +181,7 @@ public class GitUtils {
             CredentialsProvider cp = new UsernamePasswordCredentialsProvider(username, password);
             Iterable<PushResult> results = git.push().setCredentialsProvider(cp).call();
             PushResult result = results.iterator().next();
-            validPushResult(result);
+            validPushResult(repository, result);
         } catch (TransportException e) {
             logger.error(e.getMessage(), e);
             throw new AuthorizedException("验证失败");
@@ -189,14 +194,16 @@ public class GitUtils {
     /**
      * 验证push结果
      *
+     * @param repository
      * @param result
      */
-    public static void validPushResult(PushResult result) {
+    public static void validPushResult(Repository repository, PushResult result) {
         String msg = "未知原因";
         if (null == result) {
             throw new TipException(("push失败: " + msg));
         }
-        RemoteRefUpdate.Status status = result.getRemoteUpdate(Constants.GIT_MASTER_HEAD).getStatus();
+        String branch = GitUtils.getBranch(repository);
+        RemoteRefUpdate.Status status = result.getRemoteUpdate(Constants.GIT_HEAD + branch).getStatus();
         switch (status) {
             case OK:
                 return;
@@ -271,6 +278,18 @@ public class GitUtils {
             uri = uri.replace("git@github.com:", "https://github.com/");
         }
         return (uri + "/blob/" + branchName + folder + "/" + fileName).replace("\\", "/");
+    }
+
+    /**
+     * 创建 Markdown 图片链接
+     * ![](https://cdn.jsdelivr.net/gh/[用户名]/[仓库名]@[分支名]/[目录]/[文件名].[扩展名])
+     */
+    public static String createMarkdownImageUrl(String uri, String branchName, String folder, String fileName) {
+        uri = uri.substring(0, uri.length() - 4);
+        if (Constants.GIT_SSH.equals(authType(uri))) {
+            uri = uri.replace("git@github.com:", "https://github.com/");
+        }
+        return "![](" + (uri.replace("github.com", "cdn.jsdelivr.net/gh") + "@" + branchName + folder + "/" + fileName + ")").replace("\\", "/");
     }
 
     /**

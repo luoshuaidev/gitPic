@@ -20,6 +20,8 @@ public class Preference {
 
     private String gitPassword;
 
+    private boolean autoRename;
+
     private Preference() {
         init();
     }
@@ -36,6 +38,7 @@ public class Preference {
         picPath = PropsUtil.getString(properties, Constants.SETTING_PIC_PATH);
         gitUsername = PropsUtil.getString(properties, Constants.SETTING_GIT_USERNAME);
         gitPassword = PropsUtil.getString(properties, Constants.SETTING_GIT_PASSWORD);
+        autoRename = Boolean.parseBoolean(PropsUtil.getString(properties, Constants.SETTING_AUTO_RENAME));
     }
 
     public void saveProjectPath(String projectPath) {
@@ -46,6 +49,11 @@ public class Preference {
     public void savePicPath(String picPath) {
         PropsUtil.saveString(properties, Constants.SETTING_FILE, Constants.SETTING_PIC_PATH, picPath);
         this.picPath = picPath;
+    }
+
+    public void saveAutoRename(boolean autoRename) {
+        PropsUtil.saveString(properties, Constants.SETTING_FILE, Constants.SETTING_AUTO_RENAME, String.valueOf(autoRename));
+        this.autoRename = autoRename;
     }
 
     public void saveGitUsername(String username) {
@@ -73,5 +81,9 @@ public class Preference {
 
     public String getGitPassword() {
         return gitPassword;
+    }
+
+    public boolean getAutoRename() {
+        return autoRename;
     }
 }

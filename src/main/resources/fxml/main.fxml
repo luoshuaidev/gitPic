@@ -69,6 +69,8 @@
             </GridPane>
 
             <HBox alignment="CENTER" prefHeight="50.0" prefWidth="600.0" spacing="10.0">
+                <JFXCheckBox fx:id="autoRenameCheckBox" styleClass="jfx-check-box" style="-fx-text-fill: #F3F3F3" text="时间戳重命名"
+                    onAction="#onCheckedChange"/>
             </HBox>
 
             <HBox alignment="CENTER" prefHeight="50.0" prefWidth="600.0" spacing="10.0">

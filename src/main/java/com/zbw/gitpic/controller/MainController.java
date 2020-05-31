@@ -1,34 +1,60 @@
 package com.zbw.gitpic.controller;
 
-import com.jfoenix.controls.*;
+import com.jfoenix.controls.JFXButton;
+import com.jfoenix.controls.JFXCheckBox;
+import com.jfoenix.controls.JFXDialog;
+import com.jfoenix.controls.JFXPasswordField;
+import com.jfoenix.controls.JFXSpinner;
+import com.jfoenix.controls.JFXTextField;
 import com.zbw.gitpic.exception.AuthorizedException;
 import com.zbw.gitpic.exception.TipException;
-import com.zbw.gitpic.utils.*;
-import javafx.application.Platform;
-import javafx.embed.swing.SwingFXUtils;
-import javafx.fxml.FXML;
-import javafx.fxml.Initializable;
-import javafx.scene.control.Label;
-import javafx.scene.image.Image;
-import javafx.scene.input.*;
-import javafx.scene.layout.StackPane;
-import javafx.stage.DirectoryChooser;
-import javafx.stage.FileChooser;
-import javafx.stage.Stage;
+import com.zbw.gitpic.utils.CastUtil;
+import com.zbw.gitpic.utils.Constants;
+import com.zbw.gitpic.utils.GitUtils;
+import com.zbw.gitpic.utils.Preference;
+import com.zbw.gitpic.utils.ThreadPool;
+
 import org.eclipse.jgit.lib.Repository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.Image;
+import java.awt.Toolkit;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.Transferable;
 import java.awt.image.BufferedImage;
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
 import java.util.ResourceBundle;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
+
+import javax.imageio.ImageIO;
+
+import javafx.application.Platform;
+import javafx.fxml.FXML;
+import javafx.fxml.Initializable;
+import javafx.scene.control.Label;
+import javafx.scene.input.DragEvent;
+import javafx.scene.input.Dragboard;
+import javafx.scene.input.TransferMode;
+import javafx.scene.layout.StackPane;
+import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
+import javafx.stage.FileChooser.ExtensionFilter;
+import javafx.stage.Stage;
 
 /**
  * @author zbw
@@ -37,12 +63,17 @@ import java.util.ResourceBundle;
 public class MainController extends StackPane implements Initializable {
 
     private static Logger logger = LoggerFactory.getLogger(MainController.class);
+    private final SimpleDateFormat format = new SimpleDateFormat("yyyyMMddHHmmssSSS");
+    private static final Pattern pattern = Pattern.compile("(jpg|jpeg|png|gif)", Pattern.CASE_INSENSITIVE);
 
     private Stage stage;
 
-    private String uploadImgFilePath;
+    private final List<String> uploadImgFilePathList = new ArrayList<>();
+    private final List<String> imgFilePathList = new ArrayList<>();
+    private final List<String> urlList = new ArrayList<>();
 
     private boolean isGitInit = false;
+    private boolean autoRename = false;
 
     private Repository repository = null;
 
@@ -57,6 +88,9 @@ public class MainController extends StackPane implements Initializable {
 
     @FXML
     private JFXTextField rawUrlTextField;
+
+    @FXML
+    private JFXCheckBox autoRenameCheckBox;
 
     @FXML
     private JFXButton commitButton;
@@ -96,6 +130,8 @@ public class MainController extends StackPane implements Initializable {
         }
 
         imgPathTextField.setText(Preference.getInstance().getPicPath());
+        autoRename = Preference.getInstance().getAutoRename();
+        autoRenameCheckBox.setSelected(autoRename);
     }
 
     /**
@@ -117,9 +153,17 @@ public class MainController extends StackPane implements Initializable {
     protected void setUploadImgPath(DragEvent event) {
         Dragboard dragboard = event.getDragboard();
         if (dragboard.hasFiles()) {
-            File file = dragboard.getFiles().get(0);
-            if (file != null) {
-                uploadImgFilePath = file.getAbsolutePath();
+            List<File> files = dragboard.getFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file != null) {
+                        String name = file.getName();
+                        String suffix = name.substring(name.lastIndexOf(".") + 1);
+                        if (pattern.matcher(suffix).matches()) {
+                            uploadImgFilePathList.add(file.getAbsolutePath());
+                        }
+                    }
+                }
             }
         }
         copyAndGenerate();
@@ -172,29 +216,49 @@ public class MainController extends StackPane implements Initializable {
     @FXML
     protected void chooseUploadImg() {
         FileChooser fileChooser = new FileChooser();
-        File file = fileChooser.showOpenDialog(stage);
-        if (null == file) {
-            return;
+        fileChooser.setTitle("选择图片");
+        fileChooser.getExtensionFilters().addAll(
+                new ExtensionFilter("图片类型", "*.jpg", "*.jpeg", "*.png", "*.gif")
+        );
+        //多选
+        List<File> files = fileChooser.showOpenMultipleDialog(stage);
+        if (files != null) {
+            for (File file : files) {
+                if (file != null) {
+                    uploadImgFilePathList.add(file.getAbsolutePath());
+                }
+            }
         }
-        uploadImgFilePath = file.getAbsolutePath();
         copyAndGenerate();
     }
 
     /**
      * 从剪贴板复制
+     * 使用 JavaFX Clipboard API 时
+     * QQ 微信 有道云笔记 win10自带截图 正常
+     * Snipaste FastStone 截图, 看图工具中复制图片 写入的图片是透明的
+     * <p>
+     * 使用 awt Clipboard API 图片都是正常的
      */
     @FXML
     protected void copyByClipboard() {
-        Clipboard clipboard = Clipboard.getSystemClipboard();
-        if (clipboard.hasImage()) {
-            Image image = clipboard.getImage();
-            BufferedImage bImage = SwingFXUtils.fromFXImage(image, null);
+        Image image = null;
+        try {
+            image = getImageFromClipboard();
+        } catch (Exception e) {
+            logger.error(e.getMessage(), e);
+            showErrorMessage("从剪切板拷贝图片异常", e);
+        }
+        if (image != null) {
             try {
+                BufferedImage bufferedImage = new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_ARGB);
+                Graphics2D g = bufferedImage.createGraphics();
+                g.drawImage(image, null, null);
                 Path tempDirectory = Files.createTempDirectory(Constants.GITPIC_PREFIX);
-                String tempFile = tempDirectory.toString() + File.separator + Constants.GITPIC_PREFIX + System.currentTimeMillis() + ".png";
+                String tempFile = tempDirectory.toString() + File.separator + format.format(new Date()) + ".png";
                 File file = new File(tempFile);
-                ImageIO.write(bImage, "png", file);
-                uploadImgFilePath = file.getAbsolutePath();
+                ImageIO.write(bufferedImage, "png", file);
+                uploadImgFilePathList.add(file.getAbsolutePath());
                 copyAndGenerate();
                 file.delete();// 删除临时图片
                 Files.delete(tempDirectory);//删除临时目录
@@ -205,6 +269,16 @@ public class MainController extends StackPane implements Initializable {
         } else {
             showErrorMessage("剪切板中没有图片");
         }
+    }
+
+    public static Image getImageFromClipboard() throws Exception {
+        Clipboard sysc = Toolkit.getDefaultToolkit().getSystemClipboard();
+        Transferable cc = sysc.getContents(null);
+        if (cc == null)
+            return null;
+        else if (cc.isDataFlavorSupported(DataFlavor.imageFlavor))
+            return (Image) cc.getTransferData(DataFlavor.imageFlavor);
+        return null;
     }
 
     /**
@@ -295,18 +369,50 @@ public class MainController extends StackPane implements Initializable {
     private void copyAndGenerate() {
         if (!isGitInit) {
             showErrorMessage("请先初始化git");
+            clearTemp();
             return;
         }
         try {
             copyToProject();
         } catch (TipException e) {
             showErrorMessage(e);
+            clearTemp();
             return;
         }
         try {
             generateGitRawPath();
         } catch (TipException e) {
             showErrorMessage(e);
+        }
+        urlListToMarkdown();
+        clearTemp();
+        urlList.clear();
+    }
+
+    private void clearTemp() {
+        uploadImgFilePathList.clear();
+        imgFilePathList.clear();
+    }
+
+    private void urlListToMarkdown() {
+        String path = imgPathTextField.getText() + File.separator + "image" + ".md";
+        BufferedWriter bw = null;
+        try {
+            bw = new BufferedWriter(new FileWriter(path, true));
+            for (String s : urlList) {
+                bw.write(s);
+                bw.newLine();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (bw != null) {
+                    bw.close();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -321,19 +427,31 @@ public class MainController extends StackPane implements Initializable {
         if (!file.isDirectory() || !file.exists()) {
             throw new TipException("保存图片文件夹路径不存在");
         }
-        File pic = new File(uploadImgFilePath);
-        if (!pic.exists() || !pic.isFile()) {
-            throw new TipException("保存图片文件夹路径不存在");
-        }
-        String gitImgPath = imgPathTextField.getText() + File.separator + pic.getName();
-        File gitPic = new File(gitImgPath);
-        try {
-            Files.copy(pic.toPath(), gitPic.toPath());
-        } catch (FileAlreadyExistsException e) {
-            throw new TipException("项目中有相同文件名文件");
-        } catch (IOException e) {
-            e.printStackTrace();
-            throw new TipException("复制文件失败");
+        for (String path : uploadImgFilePathList) {
+            File pic = new File(path);
+            if (!pic.exists() || !pic.isFile()) {
+                throw new TipException("保存图片文件夹路径不存在");
+            }
+            String gitImgPath;
+            if (autoRename) {
+                gitImgPath = imgPathTextField.getText() + File.separator + format.format(new Date()) + ".png";
+            } else {
+                gitImgPath = imgPathTextField.getText() + File.separator + pic.getName();
+            }
+            imgFilePathList.add(gitImgPath);
+            File gitPic = new File(gitImgPath);
+            try {
+                Files.copy(pic.toPath(), gitPic.toPath());
+                //防止小概率重名导致无法复制的问题
+                TimeUnit.MILLISECONDS.sleep(1);
+            } catch (FileAlreadyExistsException e) {
+                throw new TipException("项目中有相同文件名文件");
+            } catch (IOException e) {
+                e.printStackTrace();
+                throw new TipException("复制文件失败");
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -341,23 +459,26 @@ public class MainController extends StackPane implements Initializable {
      * 生成raw链接
      */
     private void generateGitRawPath() {
-        File pic = new File(uploadImgFilePath);
-        if (!pic.exists() || pic.isDirectory()) {
-            throw new TipException("请选择正确的图片文件");
+        for (String path : imgFilePathList) {
+            File pic = new File(path);
+            if (!pic.exists() || pic.isDirectory()) {
+                throw new TipException("请选择正确的图片文件");
+            }
+            if (null == repository) {
+                throw new TipException("请先初始化git项目");
+            }
+            String uri = GitUtils.getRemoteUri(repository);
+            String branch = GitUtils.getBranch(repository);
+            String folder = imgPathTextField.getText().replace(projectPathTextField.getText(), "");
+            String name = path.substring(path.lastIndexOf(File.separator) + 1);
+            String url = GitUtils.createMarkdownImageUrl(uri, branch, folder, name);
+            urlList.add(url);
+            rawUrlTextField.setText(url);
+            rawUrlTextField.requestFocus();
+            rawUrlTextField.selectAll();
+            rawUrlTextField.copy();
+            showSuccessMessage("已复制图片路径到剪切板");
         }
-        if (null == repository) {
-            throw new TipException("请先初始化git项目");
-        }
-        String uri = GitUtils.getRemoteUri(repository);
-        String branch = GitUtils.getBranch(repository);
-        String folder = imgPathTextField.getText().replace(projectPathTextField.getText(), "");
-        String name = uploadImgFilePath.substring(uploadImgFilePath.lastIndexOf(File.separator) + 1);
-        String url = GitUtils.createGitBlobUrl(uri, branch, folder, name);
-        rawUrlTextField.setText(GitUtils.createGitCdnUrl(url));
-        rawUrlTextField.requestFocus();
-        rawUrlTextField.selectAll();
-        rawUrlTextField.copy();
-        showSuccessMessage("已复制图片路径到剪切板");
     }
 
     /**
@@ -466,5 +587,11 @@ public class MainController extends StackPane implements Initializable {
 
     private void hidePromptSpinner() {
         Platform.runLater(() -> promptSpinner.setVisible(false));
+    }
+
+    @FXML
+    public void onCheckedChange() {
+        autoRename = autoRenameCheckBox.isSelected();
+        Preference.getInstance().saveAutoRename(autoRename);
     }
 }
